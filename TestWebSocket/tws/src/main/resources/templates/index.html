@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 로컬 스토리지에서 색상 값을 불러와 적용합니다
+            if (localStorage.getItem('headerColor')) {
+                document.querySelector('.header').style.backgroundColor = localStorage.getItem('headerColor');
+                document.querySelector('#header-color').value = localStorage.getItem('headerColor');
+            }
+            if (localStorage.getItem('sidebarColor')) {
+                document.querySelector('.sidebar').style.backgroundColor = localStorage.getItem('sidebarColor');
+                document.querySelector('#sidebar-color').value = localStorage.getItem('sidebarColor');
+            }
+            if (localStorage.getItem('valueColor')){
+                const valueColor = localStorage.getItem('valueColor');
+                document.querySelectorAll('.value-container').forEach(function(element) {
+                    element.style.color = valueColor;
+                });
+                document.querySelector('#value-color').value = localStorage.getItem('valueColor');
+            }
+            if(localStorage.getItem('boxColor')){
+                const boxColor = localStorage.getItem('boxColor');
+                document.querySelectorAll('.item').forEach(function(element){
+                    element.style.backgroundColor = boxColor;
+                });
+            }
+
+            function fetchServerTime() {
+                fetch('/api/time')
+                    .then(response => response.json())
+                    .then(data => {
+                        const now = new Date(data.currentTime);
+                        const year = now.getFullYear();
+                        const month = String(now.getMonth() + 1).padStart(2, '0');
+                        const day = String(now.getDate()).padStart(2, '0');
+                        const dateString = `${year}/${month}/${day}`;
+                        const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        document.getElementById('current-time').textContent = `${dateString} ${timeString}`;
+                    })
+                    .catch(error => console.error('Error fetching server time:', error));
+            }
+
+            // 페이지 로드 시 서버 시간 업데이트
+            fetchServerTime();
+            // 1분마다 서버 시간 업데이트
+            setInterval(fetchServerTime, 60000);
+
+            // 로컬 시간도 업데이트 (1초마다)
+            setInterval(() => {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const dateString = `${year}/${month}/${day}`;
+                const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                document.getElementById('current-time').textContent = `${dateString} ${timeString}`;
+            }, 1000);
+        });
+    </script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="visual.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/js/all.min.js"></script>
+</head>
+<body>
+    <div class="dashboard">
+        <header class="header">
+            <span class="header-content">실시간 기상 실황</span>
+            <span id="current-time"></span>
+        </header>
+        <aside class="sidebar">
+            <i class="fas fa-cog settings-icon"></i>
+        </aside>
+        <main class="main-content">
+            <div class="item">
+                <span class="key">온도</span> 
+                <div class="value-container">
+                    <span class="value" id="message">N/A</span>
+                    <span class="unit">(°C)</span>
+                </div>
+            </div>
+            <div class="item">
+                <span class="key">습도</span> 
+                <div class="value-container">
+                    <span class="value" id="humData">N/A</span> 
+                    <span class= "unit">(%)</span>
+                </div>
+            </div>
+            <div class="item">
+                <span class="key">풍향</span> 
+                <div class="value-container">
+                    <span class="value" id="windDirect">N/A</span> 
+                    <span class="unit">(°)</span>
+                </div>
+            </div>
+            <div class="item">
+                <span class="key">풍속</span> 
+                <div class="value-container">
+                    <span class="value" id="windSpeed">N/A</span> 
+                    <span class="unit">(m/s)</span>
+                </div>
+            </div>
+            <div class="detail"><iframe src="http://localhost:3000/d-solo/bdp45nrr65fk0d/telegraf-system-metrics?orgId=1&refresh=1m&from=now-2m&to=now&panelId=65084" width="100%" height="100%" frameborder="0"></iframe></div>
+            <div class="detail"><iframe src="http://localhost:3000/d-solo/bdp45nrr65fk0d/telegraf-system-metrics?orgId=1&refresh=1m&from=now-2m&to=now&panelId=65082" width="100%" height="100%" frameborder="0"></iframe></div>
+            <div class="detail"><iframe src="http://localhost:3000/d-solo/bdp45nrr65fk0d/telegraf-system-metrics?orgId=1&refresh=1m&from=now-2m&to=now&panelId=65083" width="100%" height="100%" frameborder="0"></iframe></div>
+            <div class="item">
+                <svg id="wind-direction-svg" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+            <div class="item">
+                <svg id="temperature-svg" viewBox="0 0 200 400" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+            <div class="chart">
+                <iframe src="http://localhost:3000/d-solo/bdp45nrr65fk0d/telegraf-system-metrics?orgId=1&refresh=1m&from=now-5m&to=now&panelId=12054" width="100%" height="100%" frameborder="0"></iframe>
+            </div>
+        </main>
+    </div>
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>색상 설정</h2>
+            <label for="header-color">헤더 색:</label>
+            <input type="color" id="header-color">
+            <br>
+            <br>
+            <label for="sidebar-color">사이드 바 색:</label>
+            <input type="color" id="sidebar-color">
+            <br>
+            <br>
+            <label for="value-color">데이터 색:</label>
+            <input type="color" id="value-color">
+            <br>
+            <br>
+            <label for="box-color">그리드 색:</label>
+            <input type="color" id="box-color">
+        </div>
+    </div>
+</body>
+</html>

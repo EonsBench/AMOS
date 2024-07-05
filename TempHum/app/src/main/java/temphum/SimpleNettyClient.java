@@ -1,53 +1,55 @@
 package temphum;
 
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioSocketChannel;
-
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.logging.LogLevel;
+import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+
 public class SimpleNettyClient {
     private static final Logger logger = LoggerFactory.getLogger(SimpleNettyClient.class);
-
     private String host;
     private int port;
-    private volatile boolean messageReceived;
-    private int noMessageCount;
-    private static final int MAX_NO_MESSAGE_COUNT = 10;
+    
+    private final int retryInterval = 5;
+    private final int idleTimeout = 60;
+    private int count=0;
+    private static final int MAX_RECONNECT_COUNT=10;
     public SimpleNettyClient(String host, int port) {
         this.host = host;
         this.port = port;
-        this.noMessageCount=0;
         logger.debug("SimpleNettyClient initialized with host: {} and port: {}", host, port);
     }
-    public boolean isMessageReceived() {
-        return messageReceived;
-    }
 
-    public void setMessageReceived(boolean messageReceived) {
-        this.messageReceived = messageReceived;
-    }
-    public void connect() throws InterruptedException {
+    public void connect() {
         EventLoopGroup eventLoopGroup = new NioEventLoopGroup();
-        ScheduledExecutorService watchdog = Executors.newScheduledThreadPool(1);
         try {
-            Bootstrap bootstrap = new Bootstrap().group(eventLoopGroup)
+            Bootstrap bootstrap = new Bootstrap()
+                .group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .handler(new ChannelInitializer<Channel>() {
                     protected void initChannel(Channel ch) throws Exception {
+                        ch.pipeline().addLast(new LoggingHandler(LogLevel.INFO));
+                        ch.pipeline().addLast(new IdleStateHandler(idleTimeout, 0, 0, TimeUnit.SECONDS));
+                        ch.pipeline().addLast(new ReconnectHandler(eventLoopGroup));
                         ch.pipeline().addLast(new MainQueueHandler(SimpleNettyClient.this));
-                        logger.debug("Channel initialized with SimpleQueueHandler");
+                        logger.debug("Channel initialized with MainQueueHandler");
                     }
                 });
 
@@ -55,64 +57,62 @@ public class SimpleNettyClient {
             ChannelFuture future = bootstrap.connect(host, port).sync();
             if (future.isSuccess()) {
                 logger.info("Server connect success on port: {}", port);
-                scheduleWatchdog(watchdog, future);
             } else {
                 logger.warn("Server connect attempt failed on port: {}", port);
+                scheduleReconnect(eventLoopGroup);
             }
-            scheduleMessageCheck(eventLoopGroup);
             future.channel().closeFuture().sync();
         } catch (Exception e) {
             logger.error("An error occurred while connecting to the server", e);
         } finally {
             eventLoopGroup.shutdownGracefully();
-            watchdog.shutdown();
             logger.info("EventLoopGroup shutdown gracefully");
         }
     }
-    private void scheduleMessageCheck(EventLoopGroup group) {
-        group.scheduleAtFixedRate(() -> {
-            if (!messageReceived) {
-                noMessageCount++;
-                logger.warn("No message received for the last period. Count: {}", noMessageCount);
-                if (noMessageCount >= MAX_NO_MESSAGE_COUNT) {
-                    logger.warn("No messages received for 10 periods. Reconnecting...");
-                    reconnect();
-                    noMessageCount=0;
-                }
+
+    public void scheduleReconnect(EventLoopGroup group) {
+        group.schedule(() -> {
+            if (count<MAX_RECONNECT_COUNT) {
+                count++;
+                logger.warn("Reconnect attempt {} of {}", count, MAX_RECONNECT_COUNT);
+                connect();
             } else {
-                noMessageCount = 0;
+                logger.error("Max reconnect attempts reached. Giving up.");
             }
-            messageReceived = false;
-        }, 1, 1, TimeUnit.MINUTES);
-    }
-    private void scheduleWatchdog(ScheduledExecutorService watchdog, ChannelFuture future) {
-        watchdog.scheduleAtFixedRate(() -> {
-            if (!messageReceived) {
-                logger.warn("No message received for the last period.");
-                // Add additional logic if needed to handle unresponsiveness
-            }
-            messageReceived = false;
-
-            // Additionally, check if the future is still done or not
-            if (future.isDone() && !future.isSuccess()) {
-                logger.error("ChannelFuture is done but unsuccessful.");
-            }
-        }, 0, 1, TimeUnit.MINUTES);
+        }, retryInterval, TimeUnit.SECONDS);
     }
 
-    private void reconnect() {
-        try {
-            connect();
-        } catch (InterruptedException e) {
-            logger.error("Error while reconnecting", e);
+    private class ReconnectHandler extends ChannelInboundHandlerAdapter {
+        private final  EventLoopGroup group;
+        public ReconnectHandler(EventLoopGroup group){
+            this.group = group;
+        }
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt){
+            if(evt instanceof IdleStateEvent){
+                IdleStateEvent event = (IdleStateEvent) evt;
+                if(event.state()==IdleState.READER_IDLE){
+                    logger.warn("No Data Received for {} seconds. Reconnecting...",idleTimeout);
+                    ctx.close();
+                    scheduleReconnect(group);
+                }
+            }else {
+                try {
+                    super.userEventTriggered(ctx, evt);
+                } catch (Exception e) {
+                    logger.error("An error occurred while processing userEventTriggered", e);
+                }
+            }
         }
     }
+
     public static void main(String[] args) throws Exception {
-        int port = 1234;
-        String host = "ip";
+        int port = 4002;
+        String host = "192.168.0.221";
         SimpleNettyClient client = new SimpleNettyClient(host, port);
         logger.info("Starting SimpleNettyClient");
         client.connect();
         logger.info("SimpleNettyClient finished");
     }
+
 }

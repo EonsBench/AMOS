@@ -30,16 +30,28 @@ public class MainQueueHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        String receivedMessage = ((ByteBuf) msg).toString(io.netty.util.CharsetUtil.UTF_8);
-        client.setMessageReceived(true);
-        logger.info("Received Message: {}", receivedMessage);
-        insertData(receivedMessage);
+        ByteBuf byteBuf = (ByteBuf) msg;
+        try {
+            String receivedMessage = byteBuf.toString(io.netty.util.CharsetUtil.UTF_8);
+            logger.info("Received Message: {}", receivedMessage);
+            insertData(receivedMessage);
+        } finally {
+            byteBuf.release(); // ByteBuf 해제
+        }
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         logger.warn("Channel inactive, connection lost.");
-        super.channelInactive(ctx);
+        try{
+            client.scheduleReconnect();
+            logger.info("reconnecting...");
+        }catch(Exception e){
+            logger.warn("reconnect not working");
+        }finally{
+            ctx.close();
+        }
+        
     }
 
     private void insertData(String data) {
